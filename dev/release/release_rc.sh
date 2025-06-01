@@ -42,17 +42,17 @@ rc=$2
 cd "${SOURCE_TOP_DIR}"
 
 if [ "${RELEASE_PULL}" -gt 0 ] || [ "${RELEASE_PUSH_TAG}" -gt 0 ]; then
-  git_origin_url="$(git remote get-url origin)"
-  if [ "${git_origin_url}" != "git@github.com:apache/iceberg-go.git" ]; then
-    echo "This script must be ran with working copy of apache/iceberg-go."
-    echo "The origin's URL: ${git_origin_url}"
+  git_origin_url="$(git remote get-url kevinjqliu)"
+  if [ "${git_origin_url}" != "git@github.com:kevinjqliu/iceberg-go.git" ]; then
+    echo "This script must be ran with working copy of kevinjqliu/iceberg-go."
+    echo "The kevinjqliu's URL: ${git_origin_url}"
     exit 1
   fi
 fi
 
 if [ "${RELEASE_PULL}" -gt 0 ]; then
   echo "Ensure using the latest commit"
-  git checkout main
+  # git checkout main
   git pull --rebase --prune
 fi
 
@@ -60,7 +60,7 @@ rc_tag="v${version}-rc${rc}"
 if [ "${RELEASE_PUSH_TAG}" -gt 0 ]; then
   echo "Tagging for RC: ${rc_tag}"
   git tag -a -m "${version} RC${rc}" "${rc_tag}"
-  git push origin "${rc_tag}"
+  git push kevinjqliu "${rc_tag}"
 fi
 
 rc_hash="$(git rev-list --max-count=1 "${rc_tag}")"
