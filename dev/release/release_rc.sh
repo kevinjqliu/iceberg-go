@@ -65,7 +65,7 @@ fi
 
 rc_hash="$(git rev-list --max-count=1 "${rc_tag}")"
 
-id="apache-iceberg-go-${version}"
+id="apache-iceberg-go-${version}-rc${rc}"
 tar_gz="${id}.tar.gz"
 
 if [ "${RELEASE_SIGN}" -gt 0 ]; then
@@ -88,23 +88,26 @@ if [ "${RELEASE_SIGN}" -gt 0 ]; then
   echo "Found GitHub Actions workflow with ID: ${run_id}"
   gh run watch --repo "${repository}" --exit-status "${run_id}"
 
+  # Create release candidate directory structure
+  mkdir -p "${id}"
+
   echo "Downloading .tar.gz from GitHub Releases"
   gh release download "${rc_tag}" \
-    --dir . \
+    --dir "${id}" \
     --pattern "${tar_gz}" \
     --repo "${repository}" \
     --skip-existing
 
   echo "Signing tar.gz and creating checksums"
+  cd "${id}"
   gpg --armor --output "${tar_gz}.asc" --detach-sig "${tar_gz}"
+  sha512sum "${tar_gz}" > "${tar_gz}.sha512"
+  cd ..
 fi
 
 if [ "${RELEASE_UPLOAD}" -gt 0 ]; then
-  echo "Uploading signature"
-  gh release upload "${rc_tag}" \
-    --clobber \
-    --repo "${repository}" \
-    "${tar_gz}.asc"
+  echo "Uploading to ASF dist/dev..."
+  svn import "${id}" "https://dist.apache.org/repos/dist/dev/iceberg/${id}" -m "Apache Iceberg Go ${version} RC${rc}"
 fi
 
 echo "Draft email for dev@iceberg.apache.org mailing list"
@@ -112,12 +115,12 @@ echo ""
 echo "---------------------------------------------------------"
 cat <<MAIL
 To: dev@iceberg.apache.org
-Subject: [VOTE][Go] Release Apache Iceberg Go ${version} RC${rc}
+Subject: [VOTE][Go] Release Apache Iceberg Go v${version} RC${rc}
 
 Hi,
 
 I would like to propose the following release candidate (RC${rc}) of
-Apache Iceberg Go version ${version}.
+Apache Iceberg Go version v${version}.
 
 This release candidate is based on commit:
 ${rc_hash} [1]
@@ -129,12 +132,12 @@ and vote on the release. See [3] for how to validate a release candidate.
 
 The vote will be open for at least 72 hours.
 
-[ ] +1 Release this as Apache Iceberg Go ${version}
+[ ] +1 Release this as Apache Iceberg Go v${version}
 [ ] +0
-[ ] -1 Do not release this as Apache Iceberg Go ${version} because...
+[ ] -1 Do not release this as Apache Iceberg Go v${version} because...
 
 [1]: https://github.com/apache/iceberg-go/tree/${rc_hash}
-[2]: https://github.com/apache/iceberg-go/releases/${rc_tag}
+[2]: https://dist.apache.org/repos/dist/dev/iceberg/apache-iceberg-go-${version}-rc${rc}
 [3]: https://github.com/apache/iceberg-go/blob/main/dev/release/README.md#verify
 MAIL
 echo "---------------------------------------------------------"

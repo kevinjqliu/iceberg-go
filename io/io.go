@@ -18,12 +18,16 @@
 package io
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"io"
 	"io/fs"
 	"net/url"
 	"strings"
+
+	"gocloud.dev/blob"
+	"gocloud.dev/blob/memblob"
 )
 
 // IO is an interface to a hierarchical file system.
@@ -65,6 +69,19 @@ type ReadFileIO interface {
 	ReadFile(name string) ([]byte, error)
 }
 
+// WriteFileIO is the interface implemented by a file system that
+// provides an optimized implementation of WriteFile
+type WriteFileIO interface {
+	IO
+
+	// Create attempts to create the named file and return a writer
+	// for it.
+	Create(name string) (FileWriter, error)
+
+	// WriteFile writes p to the named file.
+	WriteFile(name string, p []byte) error
+}
+
 // A File provides access to a single file. The File interface is the
 // minimum implementation required for Iceberg to interact with a file.
 // Directory files should also implement
@@ -72,6 +89,12 @@ type File interface {
 	fs.File
 	io.ReadSeekCloser
 	io.ReaderAt
+}
+
+// A FileWriter represents an open writable file.
+type FileWriter interface {
+	io.WriteCloser
+	io.ReaderFrom
 }
 
 // A ReadDirFile is a directory file whose entries can be read with the
@@ -105,6 +128,7 @@ func FS(fsys fs.FS) IO {
 	if _, ok := fsys.(fs.ReadFileFS); ok {
 		return readFileFS{ioFS{fsys, nil}}
 	}
+
 	return ioFS{fsys, nil}
 }
 
@@ -115,6 +139,7 @@ func FSPreProcName(fsys fs.FS, fn func(string) string) IO {
 	if _, ok := fsys.(fs.ReadFileFS); ok {
 		return readFileFS{ioFS{fsys, fn}}
 	}
+
 	return ioFS{fsys, fn}
 }
 
@@ -131,6 +156,7 @@ func (r readFileFS) ReadFile(name string) ([]byte, error) {
 	if !ok {
 		return nil, errMissingReadFile
 	}
+
 	return rfs.ReadFile(name)
 }
 
@@ -163,6 +189,7 @@ func (f ioFS) Remove(name string) error {
 	if !ok {
 		return errMissingRemove
 	}
+
 	return r.Remove(name)
 }
 
@@ -186,6 +213,7 @@ func (f ioFile) Seek(offset int64, whence int) (int64, error) {
 	if !ok {
 		return 0, errMissingSeek
 	}
+
 	return s.Seek(offset, whence)
 }
 
@@ -194,6 +222,7 @@ func (f ioFile) ReadAt(p []byte, off int64) (n int, err error) {
 	if !ok {
 		return 0, errMissingReadAt
 	}
+
 	return r.ReadAt(p, off)
 }
 
@@ -206,20 +235,39 @@ func (f ioFile) ReadDir(count int) ([]fs.DirEntry, error) {
 	return d.ReadDir(count)
 }
 
-func inferFileIOFromSchema(path string, props map[string]string) (IO, error) {
+func inferFileIOFromSchema(ctx context.Context, path string, props map[string]string) (IO, error) {
 	parsed, err := url.Parse(path)
 	if err != nil {
 		return nil, err
 	}
+	var bucket *blob.Bucket
 
 	switch parsed.Scheme {
 	case "s3", "s3a", "s3n":
-		return createS3FileIO(parsed, props)
+		bucket, err = createS3Bucket(ctx, parsed, props)
+		if err != nil {
+			return nil, err
+		}
+	case "gs":
+		bucket, err = createGCSBucket(ctx, parsed, props)
+		if err != nil {
+			return nil, err
+		}
+	case "mem":
+		// memblob doesn't use the URL host or path
+		bucket = memblob.OpenBucket(nil)
 	case "file", "":
 		return LocalFS{}, nil
+	case "abfs", "abfss", "wasb", "wasbs":
+		bucket, err = createAzureBucket(ctx, parsed, props)
+		if err != nil {
+			return nil, err
+		}
 	default:
 		return nil, fmt.Errorf("IO for file '%s' not implemented", path)
 	}
+
+	return createBlobFS(ctx, bucket, parsed.Host), nil
 }
 
 // LoadFS takes a map of properties and an optional URI location
@@ -229,13 +277,13 @@ func inferFileIOFromSchema(path string, props map[string]string) (IO, error) {
 // implementation. Otherwise this will return an error if the schema
 // does not yet have an implementation here.
 //
-// Currently only LocalFS and S3 are implemented.
-func LoadFS(props map[string]string, location string) (IO, error) {
+// Currently local, S3, GCS, and In-Memory FSs are implemented.
+func LoadFS(ctx context.Context, props map[string]string, location string) (IO, error) {
 	if location == "" {
 		location = props["warehouse"]
 	}
 
-	iofs, err := inferFileIOFromSchema(location, props)
+	iofs, err := inferFileIOFromSchema(ctx, location, props)
 	if err != nil {
 		return nil, err
 	}

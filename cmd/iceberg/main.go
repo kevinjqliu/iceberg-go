@@ -27,6 +27,8 @@ import (
 
 	"github.com/apache/iceberg-go"
 	"github.com/apache/iceberg-go/catalog"
+	"github.com/apache/iceberg-go/catalog/glue"
+	"github.com/apache/iceberg-go/catalog/rest"
 	"github.com/apache/iceberg-go/config"
 	"github.com/apache/iceberg-go/table"
 
@@ -49,6 +51,19 @@ Usage:
   iceberg properties [options] remove (namespace | table) IDENTIFIER PROPNAME
   iceberg -h | --help | --version
 
+Commands:
+  describe    Describe a namespace or a table.
+  list        List tables or namespaces.
+  schema      Get the schema of the table.
+  create      Create a namespace or a table.
+  spec        Return the partition spec of the table.
+  uuid        Return the UUID of the table.
+  location    Return the location of the table.
+  drop        Operations to drop a namespace or table.
+  files       List all the files of the table.
+  rename      Rename a table.
+  properties  Properties on tables/namespaces.
+
 Arguments:
   PARENT         Catalog parent namespace
   IDENTIFIER     fully qualified namespace or table
@@ -57,15 +72,17 @@ Arguments:
   VALUE          value to set
 
 Options:
-  -h --help          show this helpe messages and exit
-  --catalog TEXT     specify the catalog type [default: rest]
-  --uri TEXT         specify the catalog URI
-  --output TYPE      output type (json/text) [default: text]
-  --credential TEXT  specify credentials for the catalog
-  --warehouse TEXT   specify the warehouse to use
-  --config TEXT      specify the path to the configuration file
+  -h --help          	show this help messages and exit
+  --catalog TEXT     	specify the catalog type [default: rest]
+  --uri TEXT         	specify the catalog URI
+  --output TYPE      	output type (json/text) [default: text]
+  --credential TEXT  	specify credentials for the catalog
+  --warehouse TEXT   	specify the warehouse to use
+  --config TEXT      	specify the path to the configuration file
   --description TEXT 	specify a description for the namespace
-  --location-uri TEXT  	specify a location URI for the namespace`
+  --location-uri TEXT  	specify a location URI for the namespace
+  --schema JSON        	specify table schema in json (for create table use only)
+                       	Ex: [{"name":"id","type":"int","required":false,"doc":"unique id"}]`
 
 type Config struct {
 	List     bool `docopt:"list"`
@@ -105,9 +122,11 @@ type Config struct {
 	Config      string `docopt:"--config"`
 	Description string `docopt:"--description"`
 	LocationURI string `docopt:"--location-uri"`
+	SchemaStr   string `docopt:"--schema"`
 }
 
 func main() {
+	ctx := context.Background()
 	args, err := docopt.ParseArgs(usage, os.Args[1:], iceberg.Version())
 	if err != nil {
 		log.Fatal(err)
@@ -127,44 +146,44 @@ func main() {
 	var output Output
 	switch strings.ToLower(cfg.Output) {
 	case "text":
-		output = text{}
+		output = textOutput{}
 	case "json":
-		fallthrough
+		output = jsonOutput{}
 	default:
 		log.Fatal("unimplemented output type")
 	}
 
 	var cat catalog.Catalog
-	switch catalog.CatalogType(cfg.Catalog) {
+	switch catalog.Type(cfg.Catalog) {
 	case catalog.REST:
-		opts := []catalog.Option[catalog.RestCatalog]{}
+		opts := []rest.Option{}
 		if len(cfg.Cred) > 0 {
-			opts = append(opts, catalog.WithCredential(cfg.Cred))
+			opts = append(opts, rest.WithCredential(cfg.Cred))
 		}
 
 		if len(cfg.Warehouse) > 0 {
-			opts = append(opts, catalog.WithWarehouseLocation(cfg.Warehouse))
+			opts = append(opts, rest.WithWarehouseLocation(cfg.Warehouse))
 		}
 
-		if cat, err = catalog.NewRestCatalog("rest", cfg.URI, opts...); err != nil {
+		if cat, err = rest.NewCatalog(ctx, "rest", cfg.URI, opts...); err != nil {
 			log.Fatal(err)
 		}
 	case catalog.Glue:
-		awscfg, err := awsconfig.LoadDefaultConfig(context.Background())
+		awscfg, err := awsconfig.LoadDefaultConfig(ctx)
 		if err != nil {
 			log.Fatal(err)
 		}
-		opts := []catalog.Option[catalog.GlueCatalog]{
-			catalog.WithAwsConfig(awscfg),
+		opts := []glue.Option{
+			glue.WithAwsConfig(awscfg),
 		}
-		cat = catalog.NewGlueCatalog(opts...)
+		cat = glue.NewCatalog(opts...)
 	default:
 		log.Fatal("unrecognized catalog type")
 	}
 
 	switch {
 	case cfg.List:
-		list(output, cat, cfg.Parent)
+		list(ctx, output, cat, cfg.Parent)
 	case cfg.Describe:
 		entityType := "any"
 		if cfg.Namespace {
@@ -173,21 +192,21 @@ func main() {
 			entityType = "tbl"
 		}
 
-		describe(output, cat, cfg.Ident, entityType)
+		describe(ctx, output, cat, cfg.Ident, entityType)
 	case cfg.Schema:
-		tbl := loadTable(output, cat, cfg.TableID)
+		tbl := loadTable(ctx, output, cat, cfg.TableID)
 		output.Schema(tbl.Schema())
 	case cfg.Spec:
-		tbl := loadTable(output, cat, cfg.TableID)
+		tbl := loadTable(ctx, output, cat, cfg.TableID)
 		output.Spec(tbl.Spec())
 	case cfg.Location:
-		tbl := loadTable(output, cat, cfg.TableID)
+		tbl := loadTable(ctx, output, cat, cfg.TableID)
 		output.Text(tbl.Location())
 	case cfg.Uuid:
-		tbl := loadTable(output, cat, cfg.TableID)
+		tbl := loadTable(ctx, output, cat, cfg.TableID)
 		output.Uuid(tbl.Metadata().TableUUID())
 	case cfg.Props:
-		properties(output, cat, propCmd{
+		properties(ctx, output, cat, propCmd{
 			get: cfg.Get, set: cfg.Set, remove: cfg.Remove,
 			namespace: cfg.Namespace, table: cfg.Table,
 			identifier: cfg.Ident,
@@ -195,8 +214,8 @@ func main() {
 			value:      cfg.Value,
 		})
 	case cfg.Rename:
-		_, err := cat.RenameTable(context.Background(),
-			catalog.ToRestIdentifier(cfg.RenameFrom), catalog.ToRestIdentifier(cfg.RenameTo))
+		_, err := cat.RenameTable(ctx,
+			catalog.ToIdentifier(cfg.RenameFrom), catalog.ToIdentifier(cfg.RenameTo))
 		if err != nil {
 			output.Error(err)
 			os.Exit(1)
@@ -206,13 +225,13 @@ func main() {
 	case cfg.Drop:
 		switch {
 		case cfg.Namespace:
-			err := cat.DropNamespace(context.Background(), catalog.ToRestIdentifier(cfg.Ident))
+			err := cat.DropNamespace(ctx, catalog.ToIdentifier(cfg.Ident))
 			if err != nil {
 				output.Error(err)
 				os.Exit(1)
 			}
 		case cfg.Table:
-			err := cat.DropTable(context.Background(), catalog.ToRestIdentifier(cfg.Ident))
+			err := cat.DropTable(ctx, catalog.ToIdentifier(cfg.Ident))
 			if err != nil {
 				output.Error(err)
 				os.Exit(1)
@@ -231,46 +250,77 @@ func main() {
 				props["Location"] = cfg.LocationURI
 			}
 
-			err := cat.CreateNamespace(context.Background(), catalog.ToRestIdentifier(cfg.Ident), props)
+			err := cat.CreateNamespace(ctx, catalog.ToIdentifier(cfg.Ident), props)
 			if err != nil {
 				output.Error(err)
 				os.Exit(1)
 			}
+			output.Text("Namespace " + cfg.Ident + " created successfully")
 		case cfg.Table:
-			output.Error(errors.New("not implemented: Create Table is WIP"))
+			if cfg.SchemaStr == "" {
+				output.Error(errors.New("missing --schema for table creation"))
+				os.Exit(1)
+			}
+
+			schema, err := iceberg.NewSchemaFromJsonFields(0, cfg.SchemaStr)
+			if err != nil {
+				output.Error(err)
+				os.Exit(1)
+			}
+
+			var opts []catalog.CreateTableOpt
+			if cfg.LocationURI != "" {
+				opts = append(opts, catalog.WithLocation(cfg.LocationURI))
+			}
+			// TODO: Support CreateTableOpt with table properties, partition spec & sort order
+
+			ident := catalog.ToIdentifier(cfg.Ident)
+			_, err = cat.CreateTable(ctx, ident, schema, opts...)
+			if err != nil {
+				output.Error(fmt.Errorf("failed to create table: %w", err))
+				os.Exit(1)
+			}
+			output.Text("Table " + cfg.Ident + " created successfully")
 		default:
 			output.Error(errors.New("not implemented"))
 			os.Exit(1)
 		}
 	case cfg.Files:
-		tbl := loadTable(output, cat, cfg.TableID)
+		tbl := loadTable(ctx, output, cat, cfg.TableID)
 		output.Files(tbl, cfg.History)
 	}
 }
 
-func list(output Output, cat catalog.Catalog, parent string) {
-	prnt := catalog.ToRestIdentifier(parent)
+func list(ctx context.Context, output Output, cat catalog.Catalog, parent string) {
+	prnt := catalog.ToIdentifier(parent)
 
-	ids, err := cat.ListNamespaces(context.Background(), prnt)
-	if err != nil {
-		output.Error(err)
-		os.Exit(1)
+	var ids []table.Identifier
+
+	if parent != "" {
+		iter := cat.ListTables(ctx, prnt)
+		for id, err := range iter {
+			if err != nil {
+				output.Error(err)
+				os.Exit(1)
+			}
+			ids = append(ids, id)
+		}
 	}
 
-	if len(ids) == 0 && parent != "" {
-		ids, err = cat.ListTables(context.Background(), prnt)
+	if len(ids) == 0 {
+		ns, err := cat.ListNamespaces(ctx, prnt)
 		if err != nil {
 			output.Error(err)
 			os.Exit(1)
 		}
+		ids = ns
 	}
+
 	output.Identifiers(ids)
 }
 
-func describe(output Output, cat catalog.Catalog, id string, entityType string) {
-	ctx := context.Background()
-
-	ident := catalog.ToRestIdentifier(id)
+func describe(ctx context.Context, output Output, cat catalog.Catalog, id string, entityType string) {
+	ident := catalog.ToIdentifier(id)
 
 	isNS, isTbl := false, false
 	if (entityType == "any" || entityType == "ns") && len(ident) > 0 {
@@ -311,8 +361,8 @@ func describe(output Output, cat catalog.Catalog, id string, entityType string) 
 	}
 }
 
-func loadTable(output Output, cat catalog.Catalog, id string) *table.Table {
-	tbl, err := cat.LoadTable(context.Background(), catalog.ToRestIdentifier(id), nil)
+func loadTable(ctx context.Context, output Output, cat catalog.Catalog, id string) *table.Table {
+	tbl, err := cat.LoadTable(ctx, catalog.ToIdentifier(id), nil)
 	if err != nil {
 		output.Error(err)
 		os.Exit(1)
@@ -328,8 +378,8 @@ type propCmd struct {
 	identifier, propname, value string
 }
 
-func properties(output Output, cat catalog.Catalog, args propCmd) {
-	ctx, ident := context.Background(), catalog.ToRestIdentifier(args.identifier)
+func properties(ctx context.Context, output Output, cat catalog.Catalog, args propCmd) {
+	ident := catalog.ToIdentifier(args.identifier)
 
 	switch {
 	case args.get:
@@ -343,12 +393,13 @@ func properties(output Output, cat catalog.Catalog, args propCmd) {
 				os.Exit(1)
 			}
 		case args.table:
-			tbl := loadTable(output, cat, args.identifier)
+			tbl := loadTable(ctx, output, cat, args.identifier)
 			props = tbl.Metadata().Properties()
 		}
 
 		if args.propname == "" {
 			output.DescribeProperties(props)
+
 			return
 		}
 
@@ -359,6 +410,7 @@ func properties(output Output, cat catalog.Catalog, args propCmd) {
 			os.Exit(1)
 		}
 	case args.set:
+		output.Text("Setting " + args.propname + "=" + args.value + " on " + args.identifier)
 		switch {
 		case args.namespace:
 			_, err := cat.UpdateNamespaceProperties(ctx, ident,
@@ -367,14 +419,18 @@ func properties(output Output, cat catalog.Catalog, args propCmd) {
 				output.Error(err)
 				os.Exit(1)
 			}
-
-			output.Text("updated " + args.propname + " on " + args.identifier)
 		case args.table:
-			loadTable(output, cat, args.identifier)
-			output.Text("Setting " + args.propname + "=" + args.value + " on " + args.identifier)
-			output.Error(errors.New("not implemented: Writing is WIP"))
+			tbl := loadTable(ctx, output, cat, args.identifier)
+			_, _, err := cat.CommitTable(ctx, tbl, nil,
+				[]table.Update{table.NewSetPropertiesUpdate(iceberg.Properties{args.propname: args.value})})
+			if err != nil {
+				output.Error(err)
+				os.Exit(1)
+			}
 		}
+		output.Text("Updated " + args.propname + " on " + args.identifier)
 	case args.remove:
+		output.Text("Removing " + args.propname + " on " + args.identifier)
 		switch {
 		case args.namespace:
 			_, err := cat.UpdateNamespaceProperties(ctx, ident,
@@ -383,19 +439,23 @@ func properties(output Output, cat catalog.Catalog, args propCmd) {
 				output.Error(err)
 				os.Exit(1)
 			}
-
-			output.Text("removing " + args.propname + " from " + args.identifier)
 		case args.table:
-			loadTable(output, cat, args.identifier)
-			output.Text("Setting " + args.propname + "=" + args.value + " on " + args.identifier)
-			output.Error(errors.New("not implemented: Writing is WIP"))
+			tbl := loadTable(ctx, output, cat, args.identifier)
+
+			_, _, err := cat.CommitTable(ctx, tbl, nil,
+				[]table.Update{table.NewRemovePropertiesUpdate([]string{args.propname})})
+			if err != nil {
+				output.Error(err)
+				os.Exit(1)
+			}
 		}
+		output.Text("Removed " + args.propname + " from " + args.identifier)
 	}
 }
 
 func mergeConf(fileConf *config.CatalogConfig, resConfig *Config) {
 	if len(resConfig.Catalog) == 0 {
-		resConfig.Catalog = fileConf.Catalog
+		resConfig.Catalog = fileConf.CatalogType
 	}
 	if len(resConfig.URI) == 0 {
 		resConfig.URI = fileConf.URI

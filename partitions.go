@@ -20,6 +20,9 @@ package iceberg
 import (
 	"encoding/json"
 	"fmt"
+	"iter"
+	"net/url"
+	"path"
 	"slices"
 	"strings"
 )
@@ -89,6 +92,7 @@ func NewPartitionSpec(fields ...PartitionField) PartitionSpec {
 func NewPartitionSpecID(id int, fields ...PartitionField) PartitionSpec {
 	ret := PartitionSpec{id: id, fields: fields}
 	ret.initialize()
+
 	return ret
 }
 
@@ -116,10 +120,16 @@ func (ps PartitionSpec) Equals(other PartitionSpec) bool {
 	return ps.id == other.id && slices.Equal(ps.fields, other.fields)
 }
 
+// Fields returns a clone of the partition fields in this spec.
+func (ps *PartitionSpec) Fields() iter.Seq[PartitionField] {
+	return slices.Values(ps.fields)
+}
+
 func (ps PartitionSpec) MarshalJSON() ([]byte, error) {
 	if ps.fields == nil {
 		ps.fields = []PartitionField{}
 	}
+
 	return json.Marshal(struct {
 		ID     int              `json:"spec-id"`
 		Fields []PartitionField `json:"fields"`
@@ -138,14 +148,14 @@ func (ps *PartitionSpec) UnmarshalJSON(b []byte) error {
 
 	ps.id, ps.fields = aux.ID, aux.Fields
 	ps.initialize()
+
 	return nil
 }
 
 func (ps *PartitionSpec) initialize() {
 	ps.sourceIdToFields = make(map[int][]PartitionField)
 	for _, f := range ps.fields {
-		ps.sourceIdToFields[f.SourceID] =
-			append(ps.sourceIdToFields[f.SourceID], f)
+		ps.sourceIdToFields[f.SourceID] = append(ps.sourceIdToFields[f.SourceID], f)
 	}
 }
 
@@ -153,7 +163,7 @@ func (ps *PartitionSpec) ID() int                    { return ps.id }
 func (ps *PartitionSpec) NumFields() int             { return len(ps.fields) }
 func (ps *PartitionSpec) Field(i int) PartitionField { return ps.fields[i] }
 
-func (ps *PartitionSpec) IsUnpartitioned() bool {
+func (ps PartitionSpec) IsUnpartitioned() bool {
 	if len(ps.fields) == 0 {
 		return true
 	}
@@ -198,6 +208,7 @@ func (ps *PartitionSpec) LastAssignedFieldID() int {
 			id = f.FieldID
 		}
 	}
+
 	return id
 }
 
@@ -227,5 +238,58 @@ func (ps *PartitionSpec) PartitionType(schema *Schema) *StructType {
 			Required: false,
 		})
 	}
+
 	return &StructType{FieldList: nestedFields}
+}
+
+// PartitionToPath produces a proper partition path from the data and schema by
+// converting the values to human readable strings and properly escaping.
+//
+// The path will be in the form of `name1=value1/name2=value2/...`.
+//
+// This does not apply the transforms to the data, it is assumed the provided data
+// has already been transformed appropriately.
+func (ps *PartitionSpec) PartitionToPath(data structLike, sc *Schema) string {
+	partType := ps.PartitionType(sc)
+
+	segments := make([]string, 0, len(partType.FieldList))
+	for i := range partType.Fields() {
+		valueStr := ps.fields[i].Transform.ToHumanStr(data.Get(i))
+
+		segments = append(segments, fmt.Sprintf("%s=%s",
+			url.QueryEscape(ps.fields[i].Name), url.QueryEscape(valueStr)))
+	}
+
+	return path.Join(segments...)
+}
+
+// AssignFreshPartitionSpecIDs creates a new PartitionSpec by reassigning the field IDs
+// from the old schema to the corresponding fields in the fresh schema, while re-assigning
+// the actual Spec IDs to 1000 + the position of the field in the partition spec.
+func AssignFreshPartitionSpecIDs(spec *PartitionSpec, old, fresh *Schema) (PartitionSpec, error) {
+	if spec == nil {
+		return PartitionSpec{}, nil
+	}
+
+	newFields := make([]PartitionField, 0, len(spec.fields))
+	for pos, field := range spec.fields {
+		origCol, ok := old.FindColumnName(field.SourceID)
+		if !ok {
+			return PartitionSpec{}, fmt.Errorf("could not find field in old schema: %s", field.Name)
+		}
+
+		freshField, ok := fresh.FindFieldByName(origCol)
+		if !ok {
+			return PartitionSpec{}, fmt.Errorf("could not find field in fresh schema: %s", field.Name)
+		}
+
+		newFields = append(newFields, PartitionField{
+			Name:      field.Name,
+			SourceID:  freshField.ID,
+			FieldID:   partitionDataIDStart + pos,
+			Transform: field.Transform,
+		})
+	}
+
+	return NewPartitionSpec(newFields...), nil
 }

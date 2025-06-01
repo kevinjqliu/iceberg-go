@@ -24,18 +24,23 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-const cfgFile = ".iceberg-go.yaml"
+const (
+	cfgFile           = ".iceberg-go.yaml"
+	defaultMaxWorkers = 5
+)
 
 type Config struct {
-	Catalogs map[string]CatalogConfig `yaml:"catalog"`
+	DefaultCatalog string                   `yaml:"default-catalog"`
+	Catalogs       map[string]CatalogConfig `yaml:"catalog"`
+	MaxWorkers     int                      `yaml:"max-workers"`
 }
 
 type CatalogConfig struct {
-	Catalog    string `yaml:"catalog"`
-	URI        string `yaml:"uri"`
-	Output     string `yaml:"output"`
-	Credential string `yaml:"credential"`
-	Warehouse  string `yaml:"warehouse"`
+	CatalogType string `yaml:"type"`
+	URI         string `yaml:"uri"`
+	Output      string `yaml:"output"`
+	Credential  string `yaml:"credential"`
+	Warehouse   string `yaml:"warehouse"`
 }
 
 func LoadConfig(configPath string) []byte {
@@ -46,7 +51,6 @@ func LoadConfig(configPath string) []byte {
 		homeDir, err := os.UserHomeDir()
 		if err != nil {
 			return nil
-
 		}
 		path = filepath.Join(homeDir, cfgFile)
 	}
@@ -54,6 +58,7 @@ func LoadConfig(configPath string) []byte {
 	if err != nil {
 		return nil
 	}
+
 	return file
 }
 
@@ -67,5 +72,29 @@ func ParseConfig(file []byte, catalogName string) *CatalogConfig {
 	if !ok {
 		return nil
 	}
+
 	return &res
 }
+
+func fromConfigFiles() Config {
+	dir := os.Getenv("GOICEBERG_HOME")
+	if dir != "" {
+		dir = filepath.Join(dir, cfgFile)
+	}
+
+	var cfg Config
+	if err := yaml.Unmarshal(LoadConfig(dir), &cfg); err != nil {
+		return cfg
+	}
+
+	if cfg.DefaultCatalog == "" {
+		cfg.DefaultCatalog = "default"
+	}
+	if cfg.MaxWorkers <= 0 {
+		cfg.MaxWorkers = defaultMaxWorkers
+	}
+
+	return cfg
+}
+
+var EnvConfig = fromConfigFiles()

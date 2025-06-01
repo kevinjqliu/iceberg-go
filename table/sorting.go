@@ -64,6 +64,7 @@ func (s *SortField) String() string {
 	if _, ok := s.Transform.(iceberg.IdentityTransform); ok {
 		return fmt.Sprintf("%d %s %s", s.SourceID, s.Direction, s.NullOrder)
 	}
+
 	return fmt.Sprintf("%s(%d) %s %s", s.Transform, s.SourceID, s.Direction, s.NullOrder)
 }
 
@@ -81,12 +82,13 @@ func (s *SortField) MarshalJSON() ([]byte, error) {
 	}
 
 	type Alias SortField
+
 	return json.Marshal((*Alias)(s))
 }
 
 func (s *SortField) UnmarshalJSON(b []byte) error {
 	type Alias SortField
-	var aux = struct {
+	aux := struct {
 		TransformString string `json:"transform"`
 		*Alias
 	}{
@@ -152,6 +154,7 @@ func (s SortOrder) String() string {
 		b.WriteByte('\n')
 	}
 	b.WriteByte(']')
+
 	return b.String()
 }
 
@@ -166,6 +169,7 @@ func (s *SortOrder) UnmarshalJSON(b []byte) error {
 	if len(s.Fields) == 0 {
 		s.Fields = []SortField{}
 		s.OrderID = 0
+
 		return nil
 	}
 
@@ -174,4 +178,40 @@ func (s *SortOrder) UnmarshalJSON(b []byte) error {
 	}
 
 	return nil
+}
+
+// AssignFreshSortOrderIDs updates and reassigns the field source IDs from the old schema
+// to the corresponding fields in the fresh schema, while also giving the Sort Order a fresh
+// ID of 0 (the initial Sort Order ID).
+func AssignFreshSortOrderIDs(sortOrder SortOrder, old, fresh *iceberg.Schema) (SortOrder, error) {
+	return AssignFreshSortOrderIDsWithID(sortOrder, old, fresh, InitialSortOrderID)
+}
+
+// AssignFreshSortOrderIDsWithID is like AssignFreshSortOrderIDs but allows specifying the id of the
+// returned SortOrder.
+func AssignFreshSortOrderIDsWithID(sortOrder SortOrder, old, fresh *iceberg.Schema, sortOrderID int) (SortOrder, error) {
+	if sortOrder.Equals(UnsortedSortOrder) {
+		return UnsortedSortOrder, nil
+	}
+
+	fields := make([]SortField, 0, len(sortOrder.Fields))
+	for _, field := range sortOrder.Fields {
+		originalField, ok := old.FindColumnName(field.SourceID)
+		if !ok {
+			return SortOrder{}, fmt.Errorf("cannot find source column id %s in old schema", field.String())
+		}
+		freshField, ok := fresh.FindFieldByName(originalField)
+		if !ok {
+			return SortOrder{}, fmt.Errorf("cannot find field %s in fresh schema", originalField)
+		}
+
+		fields = append(fields, SortField{
+			SourceID:  freshField.ID,
+			Transform: field.Transform,
+			Direction: field.Direction,
+			NullOrder: field.NullOrder,
+		})
+	}
+
+	return SortOrder{OrderID: sortOrderID, Fields: fields}, nil
 }

@@ -34,46 +34,50 @@ var testArgs = []struct {
 	{[]byte(`
 catalog:
   custom-catalog:
-    catalog: rest
+    type: rest
     uri: http://localhost:8181/
     output: text
     credential: client-id:client-secret
     warehouse: catalog_name
 `), "default", nil},
 	// default catalog
-	{[]byte(`
+	{
+		[]byte(`
 catalog:
   default:
-    catalog: rest
+    type: rest
     uri: http://localhost:8181/
     output: text
     credential: client-id:client-secret
     warehouse: catalog_name
 `), "default",
 		&CatalogConfig{
-			Catalog:    "rest",
-			URI:        "http://localhost:8181/",
-			Output:     "text",
-			Credential: "client-id:client-secret",
-			Warehouse:  "catalog_name",
-		}},
+			CatalogType: "rest",
+			URI:         "http://localhost:8181/",
+			Output:      "text",
+			Credential:  "client-id:client-secret",
+			Warehouse:   "catalog_name",
+		},
+	},
 	// custom catalog
-	{[]byte(`
+	{
+		[]byte(`
 catalog:
   custom-catalog:
-    catalog: rest
+    type: rest
     uri: http://localhost:8181/
     output: text
     credential: client-id:client-secret
     warehouse: catalog_name
 `), "custom-catalog",
 		&CatalogConfig{
-			Catalog:    "rest",
-			URI:        "http://localhost:8181/",
-			Output:     "text",
-			Credential: "client-id:client-secret",
-			Warehouse:  "catalog_name",
-		}},
+			CatalogType: "rest",
+			URI:         "http://localhost:8181/",
+			Output:      "text",
+			Credential:  "client-id:client-secret",
+			Warehouse:   "catalog_name",
+		},
+	},
 }
 
 func TestParseConfig(t *testing.T) {

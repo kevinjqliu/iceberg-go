@@ -19,10 +19,13 @@ package iceberg
 
 import (
 	"bytes"
+	"io"
 	"testing"
 	"time"
 
 	"github.com/apache/iceberg-go/internal"
+	"github.com/hamba/avro/v2"
+	"github.com/hamba/avro/v2/ocf"
 	"github.com/stretchr/testify/suite"
 )
 
@@ -31,7 +34,7 @@ var (
 	snapshotID            int64 = 9182715666859759686
 	addedRows             int64 = 237993
 	manifestFileRecordsV1       = []ManifestFile{
-		NewManifestV1Builder("/home/iceberg/warehouse/nyc/taxis_partitioned/metadata/0125c686-8aa6-4502-bdcc-b6d17ca41a3b-m0.avro",
+		NewManifestFile(1, "/home/iceberg/warehouse/nyc/taxis_partitioned/metadata/0125c686-8aa6-4502-bdcc-b6d17ca41a3b-m0.avro",
 			7989, 0, snapshotID).
 			AddedFiles(3).
 			ExistingFiles(0).
@@ -43,11 +46,13 @@ var (
 				ContainsNull: true, ContainsNaN: &falseBool,
 				LowerBound: &[]byte{0x01, 0x00, 0x00, 0x00},
 				UpperBound: &[]byte{0x02, 0x00, 0x00, 0x00},
-			}}).Build()}
+			}}).Build(),
+	}
 
 	manifestFileRecordsV2 = []ManifestFile{
-		NewManifestV2Builder("/home/iceberg/warehouse/nyc/taxis_partitioned/metadata/0125c686-8aa6-4502-bdcc-b6d17ca41a3b-m0.avro",
-			7989, 0, ManifestContentDeletes, snapshotID).
+		NewManifestFile(2, "/home/iceberg/warehouse/nyc/taxis_partitioned/metadata/0125c686-8aa6-4502-bdcc-b6d17ca41a3b-m0.avro",
+			7989, 0, snapshotID).
+			Content(ManifestContentDeletes).
 			SequenceNum(3, 3).
 			AddedFiles(3).
 			ExistingFiles(0).
@@ -60,14 +65,15 @@ var (
 				ContainsNaN:  &falseBool,
 				LowerBound:   &[]byte{0x01, 0x00, 0x00, 0x00},
 				UpperBound:   &[]byte{0x02, 0x00, 0x00, 0x00},
-			}}).Build()}
+			}}).Build(),
+	}
 
 	entrySnapshotID        int64 = 8744736658442914487
 	intZero                      = 0
-	manifestEntryV1Records       = []*manifestEntryV1{
+	manifestEntryV1Records       = []*manifestEntry{
 		{
 			EntryStatus: EntryStatusADDED,
-			Snapshot:    entrySnapshotID,
+			Snapshot:    &entrySnapshotID,
 			Data: &dataFile{
 				// bad value for Content but this field doesn't exist in V1
 				// so it shouldn't get written and shouldn't be read back out
@@ -76,7 +82,7 @@ var (
 				Content:          EntryContentEqDeletes,
 				Path:             "/home/iceberg/warehouse/nyc/taxis_partitioned/data/VendorID=null/00000-633-d8a4223e-dc97-45a1-86e1-adaba6e8abd7-00001.parquet",
 				Format:           ParquetFile,
-				PartitionData:    map[string]any{"VendorID": int(1), "tpep_pickup_datetime": time.Unix(1925, 0)},
+				PartitionData:    map[string]any{"VendorID": int(1), "tpep_pickup_datetime": time.Unix(1925, 0).UnixMicro()},
 				RecordCount:      19513,
 				FileSize:         388872,
 				BlockSizeInBytes: 67108864,
@@ -191,11 +197,11 @@ var (
 		},
 		{
 			EntryStatus: EntryStatusADDED,
-			Snapshot:    8744736658442914487,
+			Snapshot:    &entrySnapshotID,
 			Data: &dataFile{
 				Path:             "/home/iceberg/warehouse/nyc/taxis_partitioned/data/VendorID=1/00000-633-d8a4223e-dc97-45a1-86e1-adaba6e8abd7-00002.parquet",
 				Format:           ParquetFile,
-				PartitionData:    map[string]any{"VendorID": int(1), "tpep_pickup_datetime": time.Unix(1925, 0)},
+				PartitionData:    map[string]any{"VendorID": int(1), "tpep_pickup_datetime": time.Unix(1925, 0).UnixMicro()},
 				RecordCount:      95050,
 				FileSize:         1265950,
 				BlockSizeInBytes: 67108864,
@@ -323,7 +329,7 @@ var (
 	dataRecord0 = manifestEntryV1Records[0].Data.(*dataFile)
 	dataRecord1 = manifestEntryV1Records[1].Data.(*dataFile)
 
-	manifestEntryV2Records = []*manifestEntryV2{
+	manifestEntryV2Records = []*manifestEntry{
 		{
 			EntryStatus: EntryStatusADDED,
 			Snapshot:    &entrySnapshotID,
@@ -365,6 +371,28 @@ var (
 			},
 		},
 	}
+
+	testSchema = NewSchema(0,
+		NestedField{ID: 1, Name: "VendorID", Type: PrimitiveTypes.Int32, Required: true},
+		NestedField{ID: 2, Name: "tpep_pickup_datetime", Type: PrimitiveTypes.Timestamp, Required: true},
+		NestedField{ID: 3, Name: "tpep_dropoff_datetime", Type: PrimitiveTypes.Timestamp, Required: true},
+		NestedField{ID: 4, Name: "passenger_count", Type: PrimitiveTypes.Int64, Required: false},
+		NestedField{ID: 5, Name: "trip_distance", Type: PrimitiveTypes.Float64, Required: true},
+		NestedField{ID: 6, Name: "RatecodeID", Type: PrimitiveTypes.Int64, Required: false},
+		NestedField{ID: 7, Name: "store_and_fwd_flag", Type: PrimitiveTypes.String, Required: false},
+		NestedField{ID: 8, Name: "PULocationID", Type: PrimitiveTypes.Int32, Required: false},
+		NestedField{ID: 9, Name: "DOLocationID", Type: PrimitiveTypes.Int32, Required: false},
+		NestedField{ID: 10, Name: "payment_type", Type: PrimitiveTypes.Int64, Required: true},
+		NestedField{ID: 11, Name: "fare_amount", Type: PrimitiveTypes.Float64, Required: true},
+		NestedField{ID: 12, Name: "extra", Type: PrimitiveTypes.Float64, Required: false},
+		NestedField{ID: 13, Name: "mta_tax", Type: PrimitiveTypes.Float64, Required: false},
+		NestedField{ID: 14, Name: "tip_amount", Type: PrimitiveTypes.Float64, Required: false},
+		NestedField{ID: 15, Name: "tolls_amount", Type: PrimitiveTypes.Float64, Required: false},
+		NestedField{ID: 16, Name: "improvement_surcharge", Type: PrimitiveTypes.Float64, Required: false},
+		NestedField{ID: 17, Name: "total_amount", Type: PrimitiveTypes.Float64, Required: true},
+		NestedField{ID: 18, Name: "congestion_surcharge", Type: PrimitiveTypes.Float64, Required: false},
+		NestedField{ID: 19, Name: "VendorID", Type: PrimitiveTypes.Int32, Required: false},
+	)
 )
 
 type ManifestTestSuite struct {
@@ -378,8 +406,9 @@ type ManifestTestSuite struct {
 }
 
 func (m *ManifestTestSuite) writeManifestList() {
-	m.Require().NoError(WriteManifestList(&m.v1ManifestList, manifestFileRecordsV1))
-	m.Require().NoError(WriteManifestList(&m.v2ManifestList, manifestFileRecordsV2))
+	m.Require().NoError(WriteManifestList(1, &m.v1ManifestList, snapshotID, nil, nil, manifestFileRecordsV1))
+	unassignedSequenceNum := int64(-1)
+	m.Require().NoError(WriteManifestList(2, &m.v2ManifestList, snapshotID, nil, &unassignedSequenceNum, manifestFileRecordsV2))
 }
 
 func (m *ManifestTestSuite) writeManifestEntries() {
@@ -393,8 +422,21 @@ func (m *ManifestTestSuite) writeManifestEntries() {
 		manifestEntryV2Recs[i] = rec
 	}
 
-	m.Require().NoError(writeManifestEntries(&m.v1ManifestEntries, manifestEntryV1Recs, 1))
-	m.Require().NoError(writeManifestEntries(&m.v2ManifestEntries, manifestEntryV2Recs, 2))
+	partitionSpec := NewPartitionSpecID(1,
+		PartitionField{FieldID: 1000, SourceID: 1, Name: "VendorID", Transform: IdentityTransform{}},
+		PartitionField{FieldID: 1001, SourceID: 2, Name: "tpep_pickup_datetime", Transform: IdentityTransform{}})
+
+	mf, err := WriteManifest("/home/iceberg/warehouse/nyc/taxis_partitioned/metadata/0125c686-8aa6-4502-bdcc-b6d17ca41a3b-m0.avro",
+		&m.v1ManifestEntries, 1, partitionSpec, testSchema, entrySnapshotID, manifestEntryV1Recs)
+	m.Require().NoError(err)
+
+	m.EqualValues(m.v1ManifestEntries.Len(), mf.Length())
+
+	mf, err = WriteManifest("/home/iceberg/warehouse/nyc/taxis_partitioned/metadata/0125c686-8aa6-4502-bdcc-b6d17ca41a3b-m0.avro",
+		&m.v2ManifestEntries, 2, partitionSpec, testSchema, entrySnapshotID, manifestEntryV2Recs)
+	m.Require().NoError(err)
+
+	m.EqualValues(m.v2ManifestEntries.Len(), mf.Length())
 }
 
 func (m *ManifestTestSuite) SetupSuite() {
@@ -404,13 +446,15 @@ func (m *ManifestTestSuite) SetupSuite() {
 
 func (m *ManifestTestSuite) TestManifestEntriesV1() {
 	var mockfs internal.MockFS
-	manifest := manifestFileV1{
-		Path: manifestFileRecordsV1[0].FilePath(),
+	manifest := manifestFile{
+		version: 1,
+		Path:    manifestFileRecordsV1[0].FilePath(),
 	}
 
 	mockfs.Test(m.T())
 	mockfs.On("Open", manifest.FilePath()).Return(&internal.MockFile{
-		Contents: bytes.NewReader(m.v1ManifestEntries.Bytes())}, nil)
+		Contents: bytes.NewReader(m.v1ManifestEntries.Bytes()),
+	}, nil)
 	defer mockfs.AssertExpectations(m.T())
 	entries, err := manifest.FetchEntries(&mockfs, false)
 	m.Require().NoError(err)
@@ -429,7 +473,8 @@ func (m *ManifestTestSuite) TestManifestEntriesV1() {
 	m.Equal(EntryStatusADDED, entry1.Status())
 	m.EqualValues(8744736658442914487, entry1.SnapshotID())
 	m.Zero(entry1.SequenceNum())
-	m.Nil(entry1.FileSequenceNum())
+	m.NotNil(entry1.FileSequenceNum())
+	m.Zero(*entry1.FileSequenceNum())
 
 	datafile := entry1.DataFile()
 	m.Equal(EntryContentData, datafile.ContentType())
@@ -602,20 +647,307 @@ func (m *ManifestTestSuite) TestReadManifestListV2() {
 	m.Equal([]byte{0x02, 0x00, 0x00, 0x00}, *part.UpperBound)
 }
 
-func (m *ManifestTestSuite) TestManifestEntriesV2() {
-	var mockfs internal.MockFS
-	manifest := manifestFileV2{
-		Path: manifestFileRecordsV2[0].FilePath(),
+func (m *ManifestTestSuite) TestReadManifestListIncompleteSchema() {
+	// This prevents a regression that could be caused by using a schema cache
+	// across multiple read/write operations of an avro file. While it may sound
+	// like a reasonable idea (caches speed things up, right?), it isn't that
+	// sort of cache: it's really a resolver to allow files with incomplete
+	// schemas, which we don't want.
+
+	// If a schema cache *were* in use, this would populate it with a definition for
+	// the missing record type in the incomplete schema. So we'll first "warm up"
+	// any cache. (Note: if working correctly, this will have no such side effect.)
+	var buf bytes.Buffer
+	seqNum := int64(9876)
+	err := WriteManifestList(2, &buf, 1234, nil, &seqNum, []ManifestFile{
+		NewManifestFile(2, "s3://bucket/namespace/table/metadata/abcd-0123.avro", 99, 0, 1234).Build(),
+	})
+	m.NoError(err)
+	files, err := ReadManifestList(&buf)
+	m.NoError(err)
+	m.Len(files, 1)
+
+	// This schema is that of a v2 manifest list, except that it refers to
+	// a type named "field_summary" for the "partitions" field, instead of
+	// actually including the definition of the "field_summary" record type.
+	// This omission should result in an error. But if a schema cache were
+	// in use, this could get resolved based on a type of the same name read
+	// from a file that defined it.
+	incompleteSchema := `
+	{
+		"name": "manifest_file",
+		"type": "record",
+		"fields": [
+			{
+				"name": "manifest_path",
+				"type": "string",
+				"field-id": 500
+			},
+			{
+				"name": "manifest_length",
+				"type": "long",
+				"field-id": 501
+			},
+			{
+				"name": "partition_spec_id",
+				"type": "int",
+				"field-id": 502
+			},
+			{
+				"name": "content",
+				"type": "int",
+				"default": 0,
+				"field-id": 517
+			},
+			{
+				"name": "sequence_number",
+				"type": "long",
+				"default": 0,
+				"field-id": 515
+			},
+			{
+				"name": "min_sequence_number",
+				"type": "long",
+				"default": 0,
+				"field-id": 516
+			},
+			{
+				"name": "added_snapshot_id",
+				"type": "long",
+				"field-id": 503
+			},
+			{
+				"name": "added_files_count",
+				"type": "int",
+				"field-id": 504
+			},
+			{
+				"name": "existing_files_count",
+				"type": "int",
+				"field-id": 505
+			},
+			{
+				"name": "deleted_files_count",
+				"type": "int",
+				"field-id": 506
+			},
+			{
+				"name": "partitions",
+				"type": [
+					"null",
+					{
+						"type": "array",
+						"items": "field_summary",
+						"element-id": 508
+					}
+				],
+				"field-id": 507
+			},
+			{
+				"name": "added_rows_count",
+				"type": "long",
+				"field-id": 512
+			},
+			{
+				"name": "existing_rows_count",
+				"type": "long",
+				"field-id": 513
+			},
+			{
+				"name": "deleted_rows_count",
+				"type": "long",
+				"field-id": 514
+			},
+			{
+				"name": "key_metadata",
+				"type": [
+					"null",
+					"bytes"
+				],
+				"field-id": 519
+			}
+		]
+	}`
+
+	// We'll generate a file that is missing part of its schema
+	cache := &avro.SchemaCache{}
+	sch, err := internal.NewManifestFileSchema(2)
+	m.NoError(err)
+	enc, err := ocf.NewEncoderWithSchema(sch, &buf,
+		ocf.WithEncoderSchemaCache(cache),
+		ocf.WithSchemaMarshaler(func(schema avro.Schema) ([]byte, error) {
+			return []byte(incompleteSchema), nil
+		}),
+		ocf.WithMetadata(map[string][]byte{
+			"format-version":     {'2'},
+			"snapshot-id":        []byte("1234"),
+			"sequence-number":    []byte("9876"),
+			"parent-snapshot-id": []byte("null"),
+		}),
+	)
+	m.NoError(err)
+	for _, file := range files {
+		m.NoError(enc.Encode(file))
 	}
 
-	mockfs.Test(m.T())
-	mockfs.On("Open", manifest.FilePath()).Return(&internal.MockFile{
-		Contents: bytes.NewReader(m.v2ManifestEntries.Bytes())}, nil)
-	defer mockfs.AssertExpectations(m.T())
-	entries, err := manifest.FetchEntries(&mockfs, false)
+	// This should fail because the file's schema is incomplete.
+	_, err = ReadManifestList(&buf)
+	m.ErrorContains(err, "unknown type: field_summary")
+}
+
+func (m *ManifestTestSuite) TestReadManifestIncompleteSchema() {
+	// This prevents a regression that could be caused by using a schema cache
+	// across multiple read/write operations of an avro file. While it may sound
+	// like a reasonable idea (caches speed things up, right?), it isn't that
+	// sort of cache: it's really a resolver to allow files with incomplete
+	// schemas, which we don't want.
+
+	// If a schema cache *were* in use, this would populate it with a definition for
+	// the missing record type in the incomplete schema. So we'll first "warm up"
+	// any cache. (Note: if working correctly, this will have no such side effect.)
+	var buf bytes.Buffer
+	partitionSpec := NewPartitionSpecID(1)
+	snapshotID := int64(12345678)
+	seqNum := int64(9876)
+	dataFileBuilder, err := NewDataFileBuilder(
+		partitionSpec,
+		EntryContentData,
+		"s3://bucket/namespace/table/data/abcd-0123.parquet",
+		ParquetFile,
+		map[int]any{},
+		100,
+		100*1000*1000,
+	)
+	m.NoError(err)
+	file, err := WriteManifest(
+		"s3://bucket/namespace/table/metadata/abcd-0123.avro", &buf, 2,
+		partitionSpec,
+		NewSchema(123,
+			NestedField{ID: 1, Name: "id", Type: Int64Type{}},
+			NestedField{ID: 2, Name: "name", Type: StringType{}},
+		),
+		snapshotID,
+		[]ManifestEntry{NewManifestEntry(
+			EntryStatusADDED,
+			&snapshotID,
+			&seqNum, &seqNum,
+			dataFileBuilder.Build(),
+		)},
+	)
+	m.NoError(err)
+
+	entries, err := ReadManifest(file, &buf, false)
+	m.NoError(err)
+	m.Len(entries, 1)
+
+	// This schema is that of a v2 manifest file, except that it refers to
+	// a type named "r2" for the "data_file" field, instead of actually
+	// including the definition of the "data_file" record type.
+	// This omission should result in an error. But if a schema cache were
+	// in use, this could get resolved based on a type of the same name read
+	// from a file that defined it.
+	incompleteSchema := `
+	{
+		"name": "manifest_entry",
+		"type": "record",
+		"fields": [
+			{
+				"name": "status",
+				"type": "int",
+				"field-id": 0
+			},
+			{
+				"name": "snapshot_id",
+				"type": [
+					"null",
+					"long"
+				],
+				"field-id": 1
+			},
+			{
+				"name": "sequence_number",
+				"type": [
+					"null",
+					"long"
+				],
+				"field-id": 3
+			},
+			{
+				"name": "file_sequence_number",
+				"type": [
+					"null",
+					"long"
+				],
+				"field-id": 4
+			},
+			{
+				"name": "data_file",
+				"type": "r2",
+				"field-id": 2
+			}
+		]
+	}`
+
+	// We'll generate a file that is missing part of its schema
+	cache := &avro.SchemaCache{}
+	partitionSchema, err := avro.NewRecordSchema("r102", "", nil) // empty struct
+	m.NoError(err)
+	sch, err := internal.NewManifestEntrySchema(partitionSchema, 2)
+	m.NoError(err)
+	enc, err := ocf.NewEncoderWithSchema(sch, &buf,
+		ocf.WithEncoderSchemaCache(cache),
+		ocf.WithSchemaMarshaler(func(schema avro.Schema) ([]byte, error) {
+			return []byte(incompleteSchema), nil
+		}),
+		ocf.WithMetadata(map[string][]byte{
+			"format-version": {'2'},
+			// TODO: spec says other things are required, like schema and partition-spec info,
+			//       but this package currently only looks at this one value when reading...
+		}),
+	)
+	m.NoError(err)
+	for _, entry := range entries {
+		m.NoError(enc.Encode(entry))
+	}
+
+	// This should fail because the file's schema is incomplete.
+	_, err = ReadManifest(file, &buf, false)
+	m.ErrorContains(err, "unknown type: r2")
+}
+
+func (m *ManifestTestSuite) TestManifestEntriesV2() {
+	manifest := manifestFile{
+		version: 2,
+		SpecID:  1,
+		Path:    manifestFileRecordsV2[0].FilePath(),
+	}
+
+	partitionSpec := NewPartitionSpecID(1,
+		PartitionField{FieldID: 1000, SourceID: 1, Name: "VendorID", Transform: IdentityTransform{}},
+		PartitionField{FieldID: 1001, SourceID: 2, Name: "tpep_pickup_datetime", Transform: IdentityTransform{}})
+
+	mockedFile := &internal.MockFile{
+		Contents: bytes.NewReader(m.v2ManifestEntries.Bytes()),
+	}
+	manifestReader, err := NewManifestReader(&manifest, mockedFile)
 	m.Require().NoError(err)
-	m.Len(entries, 2)
-	m.Zero(manifest.PartitionSpecID())
+	m.Equal(2, manifestReader.Version())
+	m.Equal(ManifestContentData, manifestReader.ManifestContent())
+	loadedSchema, err := manifestReader.Schema()
+	m.Require().NoError(err)
+	m.True(loadedSchema.Equals(testSchema))
+	loadedPartitionSpec, err := manifestReader.PartitionSpec()
+	m.Require().NoError(err)
+	m.True(loadedPartitionSpec.Equals(partitionSpec))
+
+	entry1, err := manifestReader.ReadEntry()
+	m.Require().NoError(err)
+	_, err = manifestReader.ReadEntry()
+	m.Require().NoError(err)
+	_, err = manifestReader.ReadEntry()
+	m.Require().ErrorIs(err, io.EOF)
+
+	m.Equal(int32(1), manifest.PartitionSpecID())
 	m.Zero(manifest.SnapshotID())
 	m.Zero(manifest.AddedDataFiles())
 	m.Zero(manifest.ExistingDataFiles())
@@ -623,8 +955,6 @@ func (m *ManifestTestSuite) TestManifestEntriesV2() {
 	m.Zero(manifest.ExistingRows())
 	m.Zero(manifest.DeletedRows())
 	m.Zero(manifest.AddedRows())
-
-	entry1 := entries[0]
 
 	m.Equal(EntryStatusADDED, entry1.Status())
 	m.Equal(entrySnapshotID, entry1.SnapshotID())
@@ -744,10 +1074,11 @@ func (m *ManifestTestSuite) TestManifestEntriesV2() {
 
 func (m *ManifestTestSuite) TestManifestEntryBuilder() {
 	dataFileBuilder, err := NewDataFileBuilder(
+		NewPartitionSpec(),
 		EntryContentData,
 		"sample.parquet",
 		ParquetFile,
-		map[string]any{"int": int(1), "datetime": time.Unix(1925, 0)},
+		map[int]any{1001: int(1), 1002: time.Unix(1925, 0).UnixMicro()},
 		1,
 		2,
 	)
@@ -776,17 +1107,16 @@ func (m *ManifestTestSuite) TestManifestEntryBuilder() {
 		2: []byte("2020-04-30 23:5:"),
 	}).SplitOffsets([]int64{4}).EqualityFieldIDs([]int{1, 1}).SortOrderID(0)
 
-	builder, err := NewManifestEntryV1Builder(
+	snapshotEntryID := int64(1)
+	entry := NewManifestEntryBuilder(
 		EntryStatusEXISTING,
-		1,
-		dataFileBuilder.Build(),
-	)
-	m.Require().NoError(err)
+		&snapshotEntryID,
+		dataFileBuilder.Build()).Build()
 
-	entry := builder.Build()
 	m.Assert().Equal(EntryStatusEXISTING, entry.Status())
 	m.Assert().EqualValues(1, entry.SnapshotID())
-	m.Assert().Equal(int64(0), entry.SequenceNum())
+	// unassigned sequence number
+	m.Assert().Equal(int64(-1), entry.SequenceNum())
 	m.Assert().Nil(entry.FileSequenceNum())
 	data := entry.DataFile()
 	m.Assert().Equal(EntryContentData, data.ContentType())
@@ -825,6 +1155,16 @@ func (m *ManifestTestSuite) TestManifestEntryBuilder() {
 	m.Assert().Equal([]int64{4}, data.SplitOffsets())
 	m.Assert().Equal([]int{1, 1}, data.EqualityFieldIDs())
 	m.Assert().Equal(0, *data.SortOrderID())
+}
+
+func (m *ManifestTestSuite) TestManifestWriterMeta() {
+	sch := NewSchema(0, NestedField{ID: 0, Name: "test01", Type: StringType{}})
+	w, err := NewManifestWriter(2, io.Discard, *UnpartitionedSpec, sch, 1)
+	m.Require().NoError(err)
+	md, err := w.meta()
+	m.Require().NoError(err)
+	m.NotEqual("null", string(md["partition-spec"]))
+	m.Equal("[]", string(md["partition-spec"]))
 }
 
 func TestManifests(t *testing.T) {

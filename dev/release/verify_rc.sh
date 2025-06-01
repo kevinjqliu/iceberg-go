@@ -35,7 +35,7 @@ VERSION="$1"
 RC="$2"
 
 ICEBERG_DIST_BASE_URL="https://downloads.apache.org/iceberg"
-DOWNLOAD_RC_BASE_URL="https://github.com/apache/iceberg-go/releases/download/v${VERSION}-rc${RC}"
+DOWNLOAD_RC_BASE_URL="https://dist.apache.org/repos/dist/dev/iceberg/apache-iceberg-go-${VERSION}-rc${RC}"
 ARCHIVE_BASE_NAME="apache-iceberg-go-${VERSION}-rc${RC}"
 
 : "${VERIFY_DEFAULT:=1}"
@@ -89,10 +89,8 @@ import_gpg_keys() {
 }
 
 if type shasum >/dev/null 2>&1; then
-  sha256_verify="shasum -a 256 -c"
   sha512_verify="shasum -a 512 -c"
 else
-  sha256_verify="sha256sum -c"
   sha512_verify="sha512sum -c"
 fi
 
@@ -102,8 +100,6 @@ fetch_archive() {
     download_rc_file "${ARCHIVE_BASE_NAME}.tar.gz.asc"
     gpg --verify "${ARCHIVE_BASE_NAME}.tar.gz.asc" "${ARCHIVE_BASE_NAME}.tar.gz"
   fi
-  download_rc_file "${ARCHIVE_BASE_NAME}.tar.gz.sha256"
-  ${sha256_verify} "${ARCHIVE_BASE_NAME}.tar.gz.sha256"
   download_rc_file "${ARCHIVE_BASE_NAME}.tar.gz.sha512"
   ${sha512_verify} "${ARCHIVE_BASE_NAME}.tar.gz.sha512"
 }

@@ -25,7 +25,7 @@ import (
 	"github.com/apache/iceberg-go/table/substrait"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"github.com/substrait-io/substrait-go/types"
+	"github.com/substrait-io/substrait-go/v3/types"
 )
 
 func TestRefTypes(t *testing.T) {
@@ -111,12 +111,18 @@ func TestExprs(t *testing.T) {
 		{iceberg.LessThan(ref, "hello"), tableSchemaSimple, "lt(.field(0) => string?, string(hello)) => boolean?"},
 		{iceberg.StartsWith(ref, "he"), tableSchemaSimple, "starts_with(.field(0) => string?, string(he)) => boolean?"},
 		{iceberg.NotStartsWith(ref, "he"), tableSchemaSimple, "not(starts_with(.field(0) => string?, string(he)) => boolean?) => boolean?"},
-		{iceberg.NewAnd(iceberg.EqualTo(ref, "hello"), iceberg.IsNull(ref)), tableSchemaSimple,
-			"and(equal(.field(0) => string?, string(hello)) => boolean?, is_null(.field(0) => string?) => boolean) => boolean?"},
-		{iceberg.NewOr(iceberg.EqualTo(ref, "hello"), iceberg.IsNull(ref)), tableSchemaSimple,
-			"or(equal(.field(0) => string?, string(hello)) => boolean?, is_null(.field(0) => string?) => boolean) => boolean?"},
-		{iceberg.NewNot(iceberg.EqualTo(ref, "hello")), tableSchemaSimple,
-			"not(equal(.field(0) => string?, string(hello)) => boolean?) => boolean?"},
+		{
+			iceberg.NewAnd(iceberg.EqualTo(ref, "hello"), iceberg.IsNull(ref)), tableSchemaSimple,
+			"and(equal(.field(0) => string?, string(hello)) => boolean?, is_null(.field(0) => string?) => boolean) => boolean?",
+		},
+		{
+			iceberg.NewOr(iceberg.EqualTo(ref, "hello"), iceberg.IsNull(ref)), tableSchemaSimple,
+			"or(equal(.field(0) => string?, string(hello)) => boolean?, is_null(.field(0) => string?) => boolean) => boolean?",
+		},
+		{
+			iceberg.NewNot(iceberg.EqualTo(ref, "hello")), tableSchemaSimple,
+			"not(equal(.field(0) => string?, string(hello)) => boolean?) => boolean?",
+		},
 	}
 
 	for _, tt := range tests {
