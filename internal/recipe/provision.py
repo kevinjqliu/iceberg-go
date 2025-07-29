@@ -24,6 +24,7 @@ from pyiceberg.types import FixedType, NestedField, UUIDType
 
 spark = SparkSession.builder.getOrCreate()
 
+#check
 catalogs = {
     'rest': load_catalog(
         "rest",
