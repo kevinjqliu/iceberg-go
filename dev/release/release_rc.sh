@@ -42,25 +42,25 @@ rc=$2
 cd "${SOURCE_TOP_DIR}"
 
 if [ "${RELEASE_PULL}" -gt 0 ] || [ "${RELEASE_PUSH_TAG}" -gt 0 ]; then
-  git_origin_url="$(git remote get-url origin)"
-  if [ "${git_origin_url}" != "git@github.com:apache/iceberg-go.git" ]; then
-    echo "This script must be ran with working copy of apache/iceberg-go."
-    echo "The origin's URL: ${git_origin_url}"
-    exit 1
-  fi
+  git_origin_url="$(git remote get-url kevinjqliu)"
+  # if [ "${git_origin_url}" != "git@github.com:apache/iceberg-go.git" ]; then
+  #   echo "This script must be ran with working copy of apache/iceberg-go."
+  #   echo "The origin's URL: ${git_origin_url}"
+  #   exit 1
+  # fi
 fi
 
-if [ "${RELEASE_PULL}" -gt 0 ]; then
-  echo "Ensure using the latest commit"
-  git checkout main
-  git pull --rebase --prune
-fi
+# if [ "${RELEASE_PULL}" -gt 0 ]; then
+#   echo "Ensure using the latest commit"
+#   git checkout main
+#   git pull kevinjqliu --rebase --prune
+# fi
 
 rc_tag="v${version}-rc${rc}"
 if [ "${RELEASE_PUSH_TAG}" -gt 0 ]; then
   echo "Tagging for RC: ${rc_tag}"
   git tag -a -m "${version} RC${rc}" "${rc_tag}"
-  git push origin "${rc_tag}"
+  git push kevinjqliu "${rc_tag}"
 fi
 
 rc_hash="$(git rev-list --max-count=1 "${rc_tag}")"
@@ -69,7 +69,7 @@ id="apache-iceberg-go-${version}"
 tar_gz="${id}.tar.gz"
 
 if [ "${RELEASE_SIGN}" -gt 0 ]; then
-  git_origin_url="$(git remote get-url origin)"
+  git_origin_url="$(git remote get-url kevinjqliu)"
   repository="${git_origin_url#*github.com?}"
   repository="${repository%.git}"
 
@@ -80,8 +80,8 @@ if [ "${RELEASE_SIGN}" -gt 0 ]; then
     run_id=$(gh run list \
       --repo "${repository}" \
       --workflow=rc.yml \
-      --json 'databaseId,event,headBranch,status' \
-      --jq ".[] | select(.event == \"push\" and .headBranch == \"${rc_tag}\") | .databaseId")
+      --json 'databaseId,event,headBranch,status,createdAt' \
+      --jq "sort_by(.createdAt) | reverse | .[] | select(.event == \"push\" and .headBranch == \"${rc_tag}\") | .databaseId")
     sleep 1
   done
 
@@ -110,10 +110,10 @@ if [ "${RELEASE_SIGN}" -gt 0 ]; then
   cd ..
 fi
 
-if [ "${RELEASE_UPLOAD}" -gt 0 ]; then
-  echo "Uploading to ASF dist/dev..."
-  svn import "${rc_upload_dir}" "https://dist.apache.org/repos/dist/dev/iceberg/apache-iceberg-go-${version}-rc${rc}" -m "Apache Iceberg Go ${version} RC${rc}"
-fi
+# if [ "${RELEASE_UPLOAD}" -gt 0 ]; then
+#   echo "Uploading to ASF dist/dev..."
+#   svn import "${rc_upload_dir}" "https://dist.apache.org/repos/dist/dev/iceberg/apache-iceberg-go-${version}-rc${rc}" -m "Apache Iceberg Go ${version} RC${rc}"
+# fi
 
 echo "Draft email for dev@iceberg.apache.org mailing list"
 echo ""
