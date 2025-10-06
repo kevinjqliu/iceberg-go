@@ -42,25 +42,25 @@ rc=$2
 cd "${SOURCE_TOP_DIR}"
 
 if [ "${RELEASE_PULL}" -gt 0 ] || [ "${RELEASE_PUSH_TAG}" -gt 0 ]; then
-  git_origin_url="$(git remote get-url origin)"
-  if [ "${git_origin_url}" != "git@github.com:apache/iceberg-go.git" ]; then
-    echo "This script must be ran with working copy of apache/iceberg-go."
-    echo "The origin's URL: ${git_origin_url}"
-    exit 1
-  fi
+  git_origin_url="$(git remote get-url kevinjqliu)"
+  # if [ "${git_origin_url}" != "git@github.com:apache/iceberg-go.git" ]; then
+  #   echo "This script must be ran with working copy of apache/iceberg-go."
+  #   echo "The origin's URL: ${git_origin_url}"
+  #   exit 1
+  # fi
 fi
 
-if [ "${RELEASE_PULL}" -gt 0 ]; then
-  echo "Ensure using the latest commit"
-  git checkout main
-  git pull --rebase --prune
-fi
+# if [ "${RELEASE_PULL}" -gt 0 ]; then
+#   echo "Ensure using the latest commit"
+#   git checkout main
+#   git pull kevinjqliu --rebase --prune
+# fi
 
 rc_tag="v${version}-rc${rc}"
 if [ "${RELEASE_PUSH_TAG}" -gt 0 ]; then
   echo "Tagging for RC: ${rc_tag}"
   git tag -a -m "${version} RC${rc}" "${rc_tag}"
-  git push origin "${rc_tag}"
+  git push kevinjqliu "${rc_tag}"
 fi
 
 rc_hash="$(git rev-list --max-count=1 "${rc_tag}")"
@@ -69,7 +69,7 @@ id="apache-iceberg-go-${version}-rc${rc}"
 tar_gz="${id}.tar.gz"
 
 if [ "${RELEASE_SIGN}" -gt 0 ]; then
-  git_origin_url="$(git remote get-url origin)"
+  git_origin_url="$(git remote get-url kevinjqliu)"
   repository="${git_origin_url#*github.com?}"
   repository="${repository%.git}"
 
@@ -109,16 +109,23 @@ if [ "${RELEASE_SIGN}" -gt 0 ]; then
   cd ..
 fi
 
-if [ "${RELEASE_UPLOAD}" -gt 0 ]; then
-  echo "Uploading to ASF dist/dev..."
-  # rename files to remove -rc${rc} suffix before uploading
-  pushd "${id}"
-  for fname in ./*; do
-    mv "${fname}" "${fname//-rc${rc}/}"
-  done
-  popd
-  svn import "${id}" "https://dist.apache.org/repos/dist/dev/iceberg/${id}" -m "Apache Iceberg Go ${version} RC${rc}"
-fi
+# rename files to remove -rc${rc} suffix before uploading
+pushd "${id}"
+for fname in ./*; do
+  mv "${fname}" "${fname//-rc${rc}/}"
+done
+popd
+
+# if [ "${RELEASE_UPLOAD}" -gt 0 ]; then
+#   echo "Uploading to ASF dist/dev..."
+#   # rename files to remove -rc${rc} suffix before uploading
+#   pushd "${id}"
+#   for fname in ./*; do
+#     mv "${fname}" "${fname//-rc${rc}/}"
+#   done
+#   popd
+#   svn import "${id}" "https://dist.apache.org/repos/dist/dev/iceberg/${id}" -m "Apache Iceberg Go ${version} RC${rc}"
+# fi
 
 echo "Draft email for dev@iceberg.apache.org mailing list"
 echo ""
