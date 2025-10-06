@@ -115,6 +115,12 @@ latest_go_version() {
     --location
     --show-error
     --silent
+    --retry 5
+    --retry-delay 3
+    --retry-max-time 60
+    --retry-connrefused
+    --connect-timeout 5
+    --max-time 30
   )
   if [ -n "${GITHUB_TOKEN:-}" ]; then
     options+=("--header" "Authorization: Bearer ${GITHUB_TOKEN}")
