@@ -65,7 +65,7 @@ fi
 
 rc_hash="$(git rev-list --max-count=1 "${rc_tag}")"
 
-id="apache-iceberg-go-${version}"
+id="apache-iceberg-go-${version}-rc${rc}"
 tar_gz="${id}.tar.gz"
 
 if [ "${RELEASE_SIGN}" -gt 0 ]; then
@@ -89,18 +89,17 @@ if [ "${RELEASE_SIGN}" -gt 0 ]; then
   gh run watch --repo "${repository}" --exit-status "${run_id}"
 
   # Create release candidate directory structure
-  rc_upload_dir="apache-iceberg-go-${version}-rc${rc}"
-  mkdir -p "${rc_upload_dir}"
+  mkdir -p "${id}"
 
   echo "Downloading .tar.gz from GitHub Releases"
   gh release download "${rc_tag}" \
-    --dir "${rc_upload_dir}" \
+    --dir "${id}" \
     --pattern "${tar_gz}" \
     --repo "${repository}" \
     --skip-existing
 
   echo "Signing tar.gz"
-  cd "${rc_upload_dir}"
+  cd "${id}"
   gpg --armor --output "${tar_gz}.asc" --detach-sig "${tar_gz}"
   echo "Add signature to GitHub release"
   gh release upload "${rc_tag}" \
@@ -112,7 +111,13 @@ fi
 
 if [ "${RELEASE_UPLOAD}" -gt 0 ]; then
   echo "Uploading to ASF dist/dev..."
-  svn import "${rc_upload_dir}" "https://dist.apache.org/repos/dist/dev/iceberg/apache-iceberg-go-${version}-rc${rc}" -m "Apache Iceberg Go ${version} RC${rc}"
+  # rename files to remove -rc${rc} suffix before uploading
+  pushd "${id}"
+  for fname in ./*; do
+    mv "${fname}" "${fname//-rc${rc}/}"
+  done
+  popd
+  svn import "${id}" "https://dist.apache.org/repos/dist/dev/iceberg/${id}" -m "Apache Iceberg Go ${version} RC${rc}"
 fi
 
 echo "Draft email for dev@iceberg.apache.org mailing list"
